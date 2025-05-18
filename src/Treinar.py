@@ -120,8 +120,8 @@ def criar_modelo(input_shape=(128, 128, 3)):
     x = layers.MaxPooling2D(2, 2)(x)
     
     # Opcional: Bloco 3 para redes mais profundas (descomentado se precisar de mais capacidade)
-    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-    x = layers.MaxPooling2D(2, 2)(x)
+    #x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+    #x = layers.MaxPooling2D(2, 2)(x)
     
     # Flatten: transforma o mapa de características 2D em vetor 1D
     x = layers.Flatten()(x)
@@ -149,7 +149,7 @@ def criar_modelo(input_shape=(128, 128, 3)):
     return model
 
 
-def treinar_modelo(model, train_gen, val_gen, epochs=10):
+def treinar_modelo(model, train_gen, val_gen, epochs=10, models_dir=None):
     """
     Treina o modelo com os geradores de dados especificados.
     
@@ -158,31 +158,32 @@ def treinar_modelo(model, train_gen, val_gen, epochs=10):
         train_gen: Gerador de dados de treino
         val_gen: Gerador de dados de validação
         epochs (int): Número máximo de épocas para treinamento
+        models_dir (str): Caminho para a pasta onde salvar o best model
         
     Retorna:
         history: Histórico de treinamento
     """
     print(f"Iniciando treinamento por {epochs} épocas...")
     
+    # Caminho para best model
+    best_model_path = os.path.join(models_dir, 'best_model.keras') if models_dir else 'best_model.keras'
+    
     # Callbacks para melhor treinamento
     callbacks = [
-        # Interrompe o treinamento quando a precisão de validação deixa de melhorar
         EarlyStopping(
-            monitor='val_accuracy',    # Métrica monitorada
-            patience=3,                # Número de épocas sem melhoria antes de parar
-            restore_best_weights=True, # Restaura pesos do melhor checkpoint
-            verbose=1                  # Mostra mensagens
+            monitor='val_accuracy',
+            patience=4,
+            restore_best_weights=True,
+            verbose=1
         ),
-        # Salva o melhor modelo durante o treinamento
         ModelCheckpoint(
-            'best_model.keras',        # Atualizado para formato .keras recomendado
-            monitor='val_accuracy',    # Métrica monitorada
-            save_best_only=True,       # Salva apenas se for o melhor até agora
-            verbose=1                  # Mostra mensagens
+            best_model_path,
+            monitor='val_accuracy',
+            save_best_only=True,
+            verbose=1
         )
     ]
     
-    # Treina o modelo e captura o histórico
     history = model.fit(
         train_gen,
         validation_data=val_gen,
@@ -194,12 +195,13 @@ def treinar_modelo(model, train_gen, val_gen, epochs=10):
     return history
 
 
-def visualizar_resultados(history):
+def visualizar_resultados(history, models_dir=None):
     """
     Cria gráficos para visualizar o histórico de treinamento.
     
     Parâmetros:
         history: Histórico retornado por model.fit()
+        models_dir (str): Caminho para a pasta onde salvar o gráfico
     """
     print("Gerando visualizações dos resultados...")
     
@@ -227,7 +229,9 @@ def visualizar_resultados(history):
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('historico_treinamento.png')  # Salva o gráfico
+    # Caminho para salvar o gráfico
+    historico_path = os.path.join(models_dir, 'historico_treinamento.png') if models_dir else 'historico_treinamento.png'
+    plt.savefig(historico_path)
     plt.show()
 
 
@@ -275,11 +279,18 @@ def main():
     # 3. Cria o modelo
     model = criar_modelo(input_shape=(128, 128, 3))
     
+    # Caminho para a pasta models
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(script_dir, 'models')
+    if not os.path.exists(models_dir):
+        os.makedirs(models_dir)
+        print(f"Pasta 'models' criada em {models_dir}")
+
     # 4. Treina o modelo
-    history = treinar_modelo(model, train_gen, val_gen, epochs=20)
+    history = treinar_modelo(model, train_gen, val_gen, epochs=20, models_dir=models_dir)
     
     # 5. Visualiza os resultados
-    visualizar_resultados(history)
+    visualizar_resultados(history, models_dir=models_dir)
     
     # 6. Salva o modelo
     salvar_modelo(model)
