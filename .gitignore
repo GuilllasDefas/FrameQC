@@ -1,3 +1,8 @@
 dataset/
+tests/
+models/
 .venv/
+__pycache__/
+best_model.keras
 ignore.md
+historico_treinamento.png
