@@ -116,12 +116,12 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Extração de características de nível médio (formas, padrões)
     x = layers.Conv2D(64, (3, 3), 
                      activation='relu',
-                     kernel_regularizer=regularizers.l2(0.001))(x)
+                     kernel_regularizer=regularizers.l2(0.005))(x)
     x = layers.MaxPooling2D(2, 2)(x)
     
     # Opcional: Bloco 3 para redes mais profundas (descomentado se precisar de mais capacidade)
-    # x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-    # x = layers.MaxPooling2D(2, 2)(x)
+    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+    x = layers.MaxPooling2D(2, 2)(x)
     
     # Flatten: transforma o mapa de características 2D em vetor 1D
     x = layers.Flatten()(x)
