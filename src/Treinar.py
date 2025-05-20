@@ -74,7 +74,7 @@ def criar_data_generators(base_path, target_size=(128, 128), batch_size=16, val_
         class_mode='binary',           # Saída binária (0 ou 1)
         subset='training'              # Usa a porção de treino definida pelo validation_split
     )
-    
+
     # Para validação: usa val_split% das imagens
     print("Criando gerador para dados de VALIDAÇÃO...")
     val_gen = datagen.flow_from_directory(
@@ -108,7 +108,7 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Extração de características de baixo nível (bordas, texturas simples)
     x = layers.Conv2D(32, (3, 3), 
                      activation='relu',                          # ReLU: ativação não-linear padrão
-                     kernel_regularizer=regularizers.l2(0.005)   # Regularização L2: ↑ valor = mais regularização
+                     kernel_regularizer=regularizers.l2(0.001)   # Regularização L2: ↑ valor = mais regularização
                      )(inputs)                                   # ↑ Regularização = menos overfitting, mas pode subajustar
     x = layers.MaxPooling2D(2, 2)(x)                             # Reduz dimensões espaciais pela metade
     
@@ -116,7 +116,7 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Extração de características de nível médio (formas, padrões)
     x = layers.Conv2D(64, (3, 3), 
                      activation='relu',
-                     kernel_regularizer=regularizers.l2(0.005))(x)
+                     kernel_regularizer=regularizers.l2(0.0005))(x)
     x = layers.MaxPooling2D(2, 2)(x)
     
     # Opcional: Bloco 3 para redes mais profundas (descomentado se precisar de mais capacidade)
@@ -135,6 +135,8 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Camada de saída: probabilidade da imagem ser "Certa"
     outputs = layers.Dense(1, activation='sigmoid')(x)  # Sigmoid fornece probabilidade [0-1]
     
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)  # Otimizador Adam com taxa de aprendizado ajustada
+
     # Montagem do modelo
     model = models.Model(inputs=inputs, outputs=outputs)
     
@@ -149,7 +151,7 @@ def criar_modelo(input_shape=(128, 128, 3)):
     return model
 
 
-def treinar_modelo(model, train_gen, val_gen, epochs=10, models_dir=None):
+def treinar_modelo(model, train_gen, val_gen, epochs=20, models_dir=None):
     """
     Treina o modelo com os geradores de dados especificados.
     
@@ -172,7 +174,7 @@ def treinar_modelo(model, train_gen, val_gen, epochs=10, models_dir=None):
     callbacks = [
         EarlyStopping(
             monitor='val_accuracy',
-            patience=4,
+            patience=5,
             restore_best_weights=True,
             verbose=1
         ),
@@ -273,7 +275,7 @@ def main():
         base_path, 
         target_size=(128, 128),
         batch_size=16,
-        val_split=0.1  # 20% para validação
+        val_split=0.2  # 20% para validação
     )
     
     # 3. Cria o modelo
