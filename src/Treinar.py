@@ -29,6 +29,7 @@ tf.get_logger().setLevel('ERROR')  # Suprimir mensagens de log do TensorFlow
 from tensorflow.keras import layers, models, Input, regularizers
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.metrics import Precision, Recall
 
 
 def criar_data_generators(base_path, target_size=(128, 128), batch_size=16, val_split=0.2):
@@ -116,12 +117,12 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Extração de características de nível médio (formas, padrões)
     x = layers.Conv2D(64, (3, 3), 
                      activation='relu',
-                     kernel_regularizer=regularizers.l2(0.0005))(x)
+                     kernel_regularizer=regularizers.l2(0.001))(x)
     x = layers.MaxPooling2D(2, 2)(x)
     
     # Opcional: Bloco 3 para redes mais profundas (descomentado se precisar de mais capacidade)
-    #x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-    #x = layers.MaxPooling2D(2, 2)(x)
+    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+    x = layers.MaxPooling2D(2, 2)(x)
     
     # Flatten: transforma o mapa de características 2D em vetor 1D
     x = layers.Flatten()(x)
@@ -135,16 +136,16 @@ def criar_modelo(input_shape=(128, 128, 3)):
     # Camada de saída: probabilidade da imagem ser "Certa"
     outputs = layers.Dense(1, activation='sigmoid')(x)  # Sigmoid fornece probabilidade [0-1]
     
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)  # Otimizador Adam com taxa de aprendizado ajustada
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)  # Otimizador Adam com taxa de aprendizado ajustada
 
     # Montagem do modelo
-    model = models.Model(inputs=inputs, outputs=outputs)
+    model = models.Model(inputs=inputs, outputs=outputs, optimizer=optimizer)
     
     # Compilação do modelo
     model.compile(
         optimizer='adam',              # Adam: otimizador adaptativo eficiente para maioria dos casos
         loss='binary_crossentropy',    # Função de perda para classificação binária
-        metrics=['accuracy']           # Métrica primária: porcentagem de acertos
+        metrics=['accuracy', Precision(), Recall()]           # Métrica primária: porcentagem de acertos
     )
     
     model.summary()  # Exibe arquitetura do modelo
@@ -185,6 +186,8 @@ def treinar_modelo(model, train_gen, val_gen, epochs=20, models_dir=None):
             verbose=1
         )
     ]
+    
+    #class_weights = {0: 1.5, 1: 1.0}  # Dá mais peso aos erros na classe negativa
     
     history = model.fit(
         train_gen,

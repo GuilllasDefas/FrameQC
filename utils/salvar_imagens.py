@@ -14,6 +14,10 @@ def salvar_imagem(caminho_imagem, porcentagem, local_destino):
         str: Caminho completo da imagem salva
     """
     try:
+
+        if not os.path.exists(local_destino):
+            os.makedirs(local_destino)
+            
         # Carregar a imagem
         imagem = Image.open(caminho_imagem)
         
