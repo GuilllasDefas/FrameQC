@@ -10,6 +10,9 @@ import os
 import warnings
 import logging
 
+import numpy as np
+import matplotlib.pyplot as plt
+
 # Suprimir avisos do TensorFlow
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 0=DEBUG, 1=INFO, 2=WARNING, 3=ERROR
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -25,286 +28,281 @@ import matplotlib.pyplot as plt
 # TensorFlow e Keras
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')  # Suprimir mensagens de log do TensorFlow
+"""
+FrameQC - Módulo de Treinamento Aprimorado
 
+Script otimizado para classificação binária de imagens usando Transfer Learning e técnicas avançadas.
+"""
+
+# Configuração de ambiente
+
+
+import tensorflow as tf
 from tensorflow.keras import layers, models, Input, regularizers
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.metrics import Precision, Recall
+from tensorflow.keras.metrics import Precision, Recall, AUC
+from sklearn.utils import class_weight
 
+# Configuração de logs e warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+warnings.filterwarnings('ignore')
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+tf.get_logger().setLevel('ERROR')
 
-def criar_data_generators(base_path, target_size=(128, 128), batch_size=16, val_split=0.2):
+def criar_data_generators(base_path, target_size=(224, 224), batch_size=32, val_split=0.2):
     """
-    Configura geradores de dados para treino e validação com data augmentation.
+    Configura geradores de dados com aumento de dados otimizado para detecção de blur.
     
     Parâmetros:
         base_path (str): Caminho base para os dados
-        target_size (tuple): Dimensões para redimensionar as imagens
-        batch_size (int): Tamanho do lote para processamento
-        val_split (float): Proporção de dados para validação (0.0-1.0)
+        target_size (tuple): Dimensões compatíveis com a rede pré-treinada
+        batch_size (int): Tamanho ajustado para melhor utilização de memória
+        val_split (float): Proporção para validação
         
     Retorna:
-        tuple: Geradores de treino e validação
+        tuple: (train_gen, val_gen), class_weights
     """
-    print(f"Configurando geradores de dados a partir de: {base_path}")
-    
-    # Configuração do data augmentation
-    # Aumenta a robustez do modelo, reduzindo overfitting
-    datagen = ImageDataGenerator(
-        # Normalização: essencial para convergência eficiente da rede
-        rescale=1./255,                # Normaliza pixels de [0-255] para [0-1]
-        
-        # Data augmentation: gera variações artificiais dos dados de treino
-        rotation_range=10,             # ↑ Valor = mais rotações aleatórias (+-20°)
-        brightness_range=[0.8, 1.2],   # ↑ Range = mais variação de brilho
-        zoom_range=0.05,               # ↑ Valor = mais variação de zoom (+-15%)
-        width_shift_range=0.05,         # ↑ Valor = mais deslocamento horizontal
-        height_shift_range=0.05,        # ↑ Valor = mais deslocamento vertical
-        horizontal_flip=True,          # Espelhamento horizontal (útil se a orientação não importa)
-        
-        # Divisão treino/validação
-        validation_split=val_split     # Reserva uma % das imagens para validação
-    )
-    
-    # Para treino: usa (1-val_split)% das imagens
-    print("Criando gerador para dados de TREINO...")
-    train_gen = datagen.flow_from_directory(
-        base_path,                     # Caminho contendo as subpastas 'Certos' e 'Errados'
-        target_size=target_size,       # Redimensiona todas as imagens para o mesmo tamanho
-        batch_size=batch_size,         # ↑ Batch = processamento mais rápido, ↓ Batch = mais estável
-        classes=['Errados', 'Certos'], # Define explicitamente: Errados→0, Certos→1
-        class_mode='binary',           # Saída binária (0 ou 1)
-        subset='training'              # Usa a porção de treino definida pelo validation_split
+    print(f"\nConfigurando geradores de dados com tamanho {target_size}...")
+
+    # Data augmentation otimizado para evitar falsos blur
+    train_datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=2,
+        brightness_range=[0.95, 1.05],
+        zoom_range=0.01,
+        width_shift_range=0.02,
+        height_shift_range=0.02,
+        fill_mode='constant',
+        horizontal_flip=True,
+        validation_split=val_split
     )
 
-    # Para validação: usa val_split% das imagens
-    print("Criando gerador para dados de VALIDAÇÃO...")
-    val_gen = datagen.flow_from_directory(
+    # Gerador de treino
+    train_gen = train_datagen.flow_from_directory(
         base_path,
         target_size=target_size,
         batch_size=batch_size,
-        classes=['Errados', 'Certos'], # Mesma ordem para consistência
+        classes=['Errados', 'Certos'],
         class_mode='binary',
-        subset='validation'            # Usa a porção de validação
+        subset='training',
+        shuffle=True
     )
+
+    # Gerador de validação (sem aumento de dados)
+    val_datagen = ImageDataGenerator(rescale=1./255, validation_split=val_split)
     
-    return train_gen, val_gen
+    val_gen = val_datagen.flow_from_directory(
+        base_path,
+        target_size=target_size,
+        batch_size=batch_size,
+        classes=['Errados', 'Certos'],
+        class_mode='binary',
+        subset='validation',
+        shuffle=False
+    )
 
+    # Cálculo de class weights para dados desbalanceados
+    classes = train_gen.classes
+    class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(classes), y=classes)
+    class_weights = dict(enumerate(class_weights))
 
-def criar_modelo(input_shape=(128, 128, 3)):
+    return train_gen, val_gen, class_weights
+
+def criar_modelo_avancado(input_shape=(224, 224, 3)):
     """
-    Cria e compila uma CNN para classificação binária com regularização.
+    Cria modelo baseado em Transfer Learning com MobileNetV2 e fine-tuning controlado.
     
     Parâmetros:
-        input_shape (tuple): Forma dos dados de entrada (altura, largura, canais)
+        input_shape (tuple): Dimensões de entrada compatíveis com a rede pré-treinada
         
     Retorna:
-        Model: Modelo Keras compilado
+        Model: Modelo Keras compilado com métricas avançadas
     """
-    print(f"Criando modelo CNN com entrada de formato {input_shape}...")
+    print("\nConstruindo modelo com Transfer Learning...")
     
-    # Camada de entrada
-    inputs = Input(shape=input_shape)
-    
-    # Bloco 1: Convolução + Pooling
-    # Extração de características de baixo nível (bordas, texturas simples)
-    x = layers.Conv2D(32, (3, 3), 
-                     activation='relu',                          # ReLU: ativação não-linear padrão
-                     kernel_regularizer=regularizers.l2(0.001)   # Regularização L2: ↑ valor = mais regularização
-                     )(inputs)                                   # ↑ Regularização = menos overfitting, mas pode subajustar
-    x = layers.MaxPooling2D(2, 2)(x)                             # Reduz dimensões espaciais pela metade
-    
-    # Bloco 2: Convolução + Pooling 
-    # Extração de características de nível médio (formas, padrões)
-    x = layers.Conv2D(64, (3, 3), 
-                     activation='relu',
-                     kernel_regularizer=regularizers.l2(0.001))(x)
-    x = layers.MaxPooling2D(2, 2)(x)
-    
-    # Opcional: Bloco 3 para redes mais profundas (descomentado se precisar de mais capacidade)
-    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-    x = layers.MaxPooling2D(2, 2)(x)
-    
-    # Flatten: transforma o mapa de características 2D em vetor 1D
-    x = layers.Flatten()(x)
-    
-    # Camada densa: aprendizado de alto nível combinando características
-    x = layers.Dense(64, activation='relu')(x)
-    
-    # Dropout: prevenção de overfitting desativando neurônios aleatoriamente durante treino
-    x = layers.Dropout(0.3)(x)  # ↑ Taxa = mais regularização (0.3 = 30% de neurônios desativados)
-    
-    # Camada de saída: probabilidade da imagem ser "Certa"
-    outputs = layers.Dense(1, activation='sigmoid')(x)  # Sigmoid fornece probabilidade [0-1]
-    
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)  # Otimizador Adam com taxa de aprendizado ajustada
-
-    # Montagem do modelo
-    model = models.Model(inputs=inputs, outputs=outputs, optimizer=optimizer)
-    
-    # Compilação do modelo
-    model.compile(
-        optimizer='adam',              # Adam: otimizador adaptativo eficiente para maioria dos casos
-        loss='binary_crossentropy',    # Função de perda para classificação binária
-        metrics=['accuracy', Precision(), Recall()]           # Métrica primária: porcentagem de acertos
+    # Carrega base model pré-treinada
+    base_model = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape,
+        include_top=False,
+        weights='imagenet'
     )
+
+    # Congela parcialmente as camadas para fine-tuning
+    for layer in base_model.layers[:100]:
+        layer.trainable = False
+
+    # Construção da arquitetura
+    inputs = Input(shape=input_shape)
+    x = base_model(inputs, training=False)  # Camada base
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dense(256, activation='relu')(x)
+    x = layers.Dropout(0.5)(x)
+    outputs = layers.Dense(1, activation='sigmoid')(x)
+
+    # Compilação com otimizador personalizado
+    model = models.Model(inputs, outputs)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
     
-    model.summary()  # Exibe arquitetura do modelo
+    model.compile(
+        optimizer=optimizer,
+        loss='binary_crossentropy',
+        metrics=[
+            'accuracy',
+            Precision(name='precision'),
+            Recall(name='recall'),
+            AUC(name='auc')
+        ]
+    )
+
+    model.summary()
     return model
 
-
-def treinar_modelo(model, train_gen, val_gen, epochs=20, models_dir=None):
+def treinar_modelo(model, train_gen, val_gen, class_weights, epochs=50, models_dir=None):
     """
-    Treina o modelo com os geradores de dados especificados.
+    Rotina de treinamento com monitoramento aprimorado e callbacks.
     
     Parâmetros:
-        model: Modelo Keras compilado
-        train_gen: Gerador de dados de treino
-        val_gen: Gerador de dados de validação
-        epochs (int): Número máximo de épocas para treinamento
-        models_dir (str): Caminho para a pasta onde salvar o best model
+        model: Modelo compilado
+        train_gen: Gerador de treino
+        val_gen: Gerador de validação
+        class_weights: Pesos para balanceamento de classes
+        epochs: Número máximo de épocas
+        models_dir: Diretório para salvar modelos
         
     Retorna:
         history: Histórico de treinamento
     """
-    print(f"Iniciando treinamento por {epochs} épocas...")
+    print("\nIniciando treinamento avançado...")
     
-    # Caminho para best model
-    best_model_path = os.path.join(models_dir, 'best_model.keras') if models_dir else 'best_model.keras'
-    
-    # Callbacks para melhor treinamento
+    # Callbacks
     callbacks = [
         EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_auc',
             patience=5,
+            mode='max',
             restore_best_weights=True,
             verbose=1
         ),
         ModelCheckpoint(
-            best_model_path,
-            monitor='val_accuracy',
+            filepath=os.path.join(models_dir, 'best_model.keras'),
+            monitor='val_auc',
             save_best_only=True,
+            mode='max',
             verbose=1
         )
     ]
-    
-    #class_weights = {0: 1.5, 1: 1.0}  # Dá mais peso aos erros na classe negativa
-    
+
     history = model.fit(
         train_gen,
         validation_data=val_gen,
         epochs=epochs,
         callbacks=callbacks,
-        verbose=1
+        class_weight=class_weights,
+        verbose=2
     )
-    
+
     return history
 
-
-def visualizar_resultados(history, models_dir=None):
+def visualizar_diagnosticos(history, train_gen, models_dir=None):
     """
-    Cria gráficos para visualizar o histórico de treinamento.
+    Gera visualizações completas do treinamento e exemplos de dados.
     
     Parâmetros:
-        history: Histórico retornado por model.fit()
-        models_dir (str): Caminho para a pasta onde salvar o gráfico
+        history: Histórico de treinamento
+        train_gen: Gerador de treino para visualização de exemplos
+        models_dir: Diretório para salvar gráficos
     """
-    print("Gerando visualizações dos resultados...")
-    
-    # Configuração de estilo
-    plt.figure(figsize=(12, 5))
-    
-    # Gráfico de acurácia
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['accuracy'], label='Treino', marker='o')
-    plt.plot(history.history['val_accuracy'], label='Validação', marker='^')
-    plt.title('Evolução da Acurácia')
-    plt.xlabel('Época')
-    plt.ylabel('Acurácia')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Gráfico de perda
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Treino', marker='o')
-    plt.plot(history.history['val_loss'], label='Validação', marker='^')
-    plt.title('Evolução da Perda (Loss)')
-    plt.xlabel('Época')
-    plt.ylabel('Perda')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
+    # Visualização de exemplos de treino
+    print("\nVisualizando exemplos de dados aumentados...")
+    images, labels = next(train_gen)
+    plt.figure(figsize=(15,5))
+    for i in range(4):
+        plt.subplot(1,4,i+1)
+        plt.imshow(images[i])
+        plt.title(f'Classe: {"Certo" if labels[i]>0.5 else "Errado"}')
+        plt.axis('off')
     plt.tight_layout()
-    # Caminho para salvar o gráfico
-    historico_path = os.path.join(models_dir, 'historico_treinamento.png') if models_dir else 'historico_treinamento.png'
-    plt.savefig(historico_path)
     plt.show()
 
+    # Gráficos de desempenho
+    print("\nGerando métricas de treinamento...")
+    plt.figure(figsize=(18,6))
+    
+    # Acurácia e AUC
+    plt.subplot(1,3,1)
+    plt.plot(history.history['accuracy'], label='Treino')
+    plt.plot(history.history['val_accuracy'], label='Validação')
+    plt.plot(history.history['auc'], label='AUC Treino')
+    plt.plot(history.history['val_auc'], label='AUC Validação')
+    plt.title('Desempenho do Modelo')
+    plt.xlabel('Época')
+    plt.legend()
+    plt.grid(True)
 
-def salvar_modelo(model, filename='FrameQC_model.keras'):
-    """
-    Salva o modelo treinado para uso posterior na subpasta 'models'.
-    
-    Parâmetros:
-        model: Modelo Keras treinado
-        filename (str): Nome do arquivo para salvar o modelo
-    """
-    # Determina o diretório do script atual
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Define o caminho para a subpasta 'models'
-    models_dir = os.path.join(script_dir, 'models')
-    
-    # Cria a pasta 'models' se não existir
-    if not os.path.exists(models_dir):
-        os.makedirs(models_dir)
-        print(f"Pasta 'models' criada em {models_dir}")
-    
-    # Caminho completo para salvar o modelo
-    model_path = os.path.join(models_dir, filename)
-    
-    # Salva o modelo usando o formato .keras recomendado
-    model.save(model_path)
-    print(f'Modelo salvo em {model_path}')
+    # Precisão e Recall
+    plt.subplot(1,3,2)
+    plt.plot(history.history['precision'], label='Precisão Treino')
+    plt.plot(history.history['val_precision'], label='Precisão Validação')
+    plt.plot(history.history['recall'], label='Recall Treino')
+    plt.plot(history.history['val_recall'], label='Recall Validação')
+    plt.title('Precisão e Recall')
+    plt.xlabel('Época')
+    plt.legend()
+    plt.grid(True)
 
+    # Perda
+    plt.subplot(1,3,3)
+    plt.plot(history.history['loss'], label='Treino')
+    plt.plot(history.history['val_loss'], label='Validação')
+    plt.title('Função de Perda')
+    plt.xlabel('Época')
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    
+    if models_dir:
+        plt.savefig(os.path.join(models_dir, 'diagnostico_treinamento.png'))
+    plt.show()
 
 def main():
-    """Função principal para executar o fluxo de treinamento."""
+    """Fluxo principal de execução"""
+    # Configurações
+    base_path = "dataset"
+    target_size = (224, 224)
+    batch_size = 62
+    epochs = 50
     
-    # 1. Define o caminho dos dados
-    base_path = "dataset"  # Caminho base contendo subpastas 'Certos' e 'Errados'
-    
-    # 2. Cria geradores de dados
-    train_gen, val_gen = criar_data_generators(
-        base_path, 
-        target_size=(128, 128),
-        batch_size=16,
-        val_split=0.2  # 20% para validação
-    )
-    
-    # 3. Cria o modelo
-    model = criar_modelo(input_shape=(128, 128, 3))
-    
-    # Caminho para a pasta models
+    # Preparação de diretórios
     script_dir = os.path.dirname(os.path.abspath(__file__))
     models_dir = os.path.join(script_dir, 'models')
-    if not os.path.exists(models_dir):
-        os.makedirs(models_dir)
-        print(f"Pasta 'models' criada em {models_dir}")
+    os.makedirs(models_dir, exist_ok=True)
 
-    # 4. Treina o modelo
-    history = treinar_modelo(model, train_gen, val_gen, epochs=20, models_dir=models_dir)
+    # Pipeline de treinamento
+    train_gen, val_gen, class_weights = criar_data_generators(
+        base_path, 
+        target_size=target_size,
+        batch_size=batch_size
+    )
     
-    # 5. Visualiza os resultados
-    visualizar_resultados(history, models_dir=models_dir)
+    model = criar_modelo_avancado(input_shape=target_size + (3,))
     
-    # 6. Salva o modelo
-    salvar_modelo(model)
+    history = treinar_modelo(
+        model,
+        train_gen,
+        val_gen,
+        class_weights,
+        epochs=epochs,
+        models_dir=models_dir
+    )
+    
+    visualizar_diagnosticos(history, train_gen, models_dir)
+    
+    # Salvar modelo final
+    model.save(os.path.join(models_dir, 'modelo_final.keras'))
+    print("\nTreinamento concluído e modelo salvo!")
 
-
-# Executa apenas quando o script é chamado diretamente
 if __name__ == "__main__":
-    # Configuração para reprodutibilidade
     tf.random.set_seed(42)
-    
-    # Executa o fluxo principal
     main()
