@@ -137,7 +137,7 @@ def criar_modelo_avancado(input_shape=(224, 224, 3)):
     x = base_model(inputs, training=False)  # Camada base
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.Dense(256, activation='relu')(x)
-    x = layers.Dropout(0.5)(x)
+    x = layers.Dropout(0.3)(x)
     outputs = layers.Dense(1, activation='sigmoid')(x)
 
     # Compilação com otimizador personalizado
@@ -175,11 +175,31 @@ def treinar_modelo(model, train_gen, val_gen, class_weights, epochs=50, models_d
     """
     print("\nIniciando treinamento avançado...")
     
+    # Callback para mostrar progresso detalhado durante cada época
+    class ProgressCallback(tf.keras.callbacks.Callback):
+        def __init__(self, num_epochs, report_interval=10):
+            super().__init__()
+            self.num_epochs = num_epochs
+            self.report_interval = report_interval
+            
+        def on_epoch_begin(self, epoch, logs=None):
+            print(f"\nÉpoca {epoch+1}/{self.num_epochs}")
+            self.batch_count = 0
+            self.start_time = time.time()
+            
+        def on_batch_end(self, batch, logs=None):
+            self.batch_count += 1
+            # Reportar a cada N batches para não sobrecarregar a saída
+            if self.batch_count % self.report_interval == 0:
+                elapsed = time.time() - self.start_time
+                metrics = " - ".join([f"{k}: {v:.4f}" for k, v in logs.items()])
+                print(f"  Batch {self.batch_count} ({elapsed:.1f}s) - {metrics}")
+    
     # Callbacks
     callbacks = [
         EarlyStopping(
             monitor='val_auc',
-            patience=5,
+            patience=15,
             mode='max',
             restore_best_weights=True,
             verbose=1
@@ -190,16 +210,25 @@ def treinar_modelo(model, train_gen, val_gen, class_weights, epochs=50, models_d
             save_best_only=True,
             mode='max',
             verbose=1
-        )
+        ),
+        ProgressCallback(epochs, report_interval=20)  # Reportar a cada 20 batches
     ]
 
+    # Importar time para medir duração
+    import time
+    
+    # Calcular e mostrar estimativa de tempo total
+    steps_per_epoch = len(train_gen)
+    print(f"Total de {steps_per_epoch} batches por época")
+    print(f"Máximo de {epochs} épocas")
+    
     history = model.fit(
         train_gen,
         validation_data=val_gen,
         epochs=epochs,
         callbacks=callbacks,
         class_weight=class_weights,
-        verbose=2
+        verbose=1  # Alterado para 1 para mostrar barra de progresso
     )
 
     return history
@@ -271,8 +300,8 @@ def main():
     # Configurações
     base_path = "dataset"
     target_size = (224, 224)
-    batch_size = 62
-    epochs = 50
+    batch_size = 64
+    epochs = 100
     
     # Preparação de diretórios
     script_dir = os.path.dirname(os.path.abspath(__file__))
