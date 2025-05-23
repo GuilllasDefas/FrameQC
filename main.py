@@ -20,7 +20,7 @@ def main():
     contagem = 0
     for imagem in imagens:
         prob = classificar_imagem(imagem)
-        if prob >= 0.99:
+        if prob >= 0.5:
             contagem += 1
             print(f'Imagems classificadas {contagem} de {len(imagens)}')
             salvar_imagem(imagem, prob, local_output)

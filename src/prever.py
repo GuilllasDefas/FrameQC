@@ -3,7 +3,7 @@ from tensorflow.keras.models import load_model
 import numpy as np
 
 # Carrega o modelo salvo
-model = load_model('./src/models/modelo_final.keras')
+model = load_model('./src/models/FrameQC_model.keras')
 
 def classificar_imagem(caminho_img):
     img = image.load_img(caminho_img, target_size=(224, 224))
