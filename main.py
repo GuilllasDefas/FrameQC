@@ -1,11 +1,13 @@
 import warnings
+
 warnings.filterwarnings('ignore')  # Ignora todos os avisos
 
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-from utils.config import local_input, local_output, local_output_errados
 from src.prever import classificar_imagem
+from utils.config import local_input, local_output, local_output_errados
 from utils.listar_imagens import listar_imagens
 from utils.salvar_imagens import salvar_imagem
 
@@ -29,5 +31,6 @@ def main():
             print(f'Imagems classificadas {contagem} de {len(imagens)}')
             salvar_imagem(imagem, prob, local_output_errados)
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
