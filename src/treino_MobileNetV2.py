@@ -4,38 +4,42 @@
 # Este código treina uma IA para classificar imagens como "Verdadeiros" ou "Falsos"
 
 import datetime  # Para criar nomes únicos de arquivos baseados na data/hora
-import logging
 # --- Configuração Inicial e Supressão de Avisos ---
 # Estas configurações silenciam mensagens técnicas desnecessárias durante o treinamento
 import os
-import warnings
 
-# Configurações para reduzir "poluição visual" no terminal
-os.environ[
-    'TF_CPP_MIN_LOG_LEVEL'
-] = '2'  # 0=tudo, 1=info, 2=avisos, 3=só erros
-os.environ[
-    'TF_DETERMINISTIC_OPS'
-] = '1'   # Faz a IA ser mais "previsível" nos resultados
-warnings.filterwarnings(
-    'ignore', category=UserWarning
-)    # Ignora avisos gerais
-warnings.filterwarnings(
-    'ignore', category=FutureWarning
-)  # Ignora avisos de futuras versões
-logging.getLogger('tensorflow').setLevel(
-    logging.ERROR
-)    # Só mostra erros do TensorFlow
-logging.getLogger('keras').setLevel(
-    logging.ERROR
-)         # Só mostra erros do Keras
+# Configurações GPU otimizadas
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_DETERMINISTIC_OPS'] = '0'  # Mudei de '1' para '0' para melhor performance GPU
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
+import tensorflow as tf
+
+# Configuração de GPU
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Permitir crescimento de memória (evita alocar toda VRAM)
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        
+        # Configurar estratégia de distribuição (se múltiplas GPUs)
+        strategy = tf.distribute.MirroredStrategy()
+        print(f'Número de GPUs disponíveis: {strategy.num_replicas_in_sync}')
+    except RuntimeError as e:
+        print(f'Erro na configuração GPU: {e}')
+else:
+    print('Nenhuma GPU detectada. Usando CPU.')
+    strategy = tf.distribute.get_strategy()
+
+# Habilitar Mixed Precision (FP16) para maior velocidade
+if gpus:
+    policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    tf.keras.mixed_precision.set_global_policy(policy)
+    print('Mixed precision habilitado (FP16)')
 
 # Importando as "ferramentas" que vamos usar
-import tensorflow as tf  # Biblioteca principal para IA
-
-tf.get_logger().setLevel(
-    'ERROR'
-)   # Mais uma configuração para silenciar mensagens
+tf.get_logger().setLevel('ERROR')  # Mais uma configuração para silenciar mensagens
 
 import itertools  # Para fazer loops especiais
 import random  # Para gerar números aleatórios
@@ -55,11 +59,21 @@ from tensorflow.keras.callbacks import (  # "Assistentes" durante o treinamento
 # === CONFIGURAÇÕES DO DATASET (conjunto de imagens) ===
 DATASET_DIR = 'dataset'  # Pasta onde estão nossas imagens de exemplo
 IMAGE_SIZE = (
-    64,
-    64,
+    320,
+    320,
 )  # Tamanho que todas as imagens terão (largura x altura em pixels)
 # Maior = mais detalhes, mas mais lento para processar
-BATCH_SIZE = 8         # Quantas imagens a IA vê de uma vez (como tamanho da "colherada") - # Batches menores para melhor precisão
+
+# Configurações otimizadas para GPU
+BATCH_SIZE = 16  # Aumentei de 4 para 16 (melhor uso da GPU)
+# Para RTX 3060 Ti com 8GB, pode usar até 32 com imagens 320x320
+
+# Se quiser usar batch size dinâmico baseado na GPU
+if gpus:
+    BATCH_SIZE = 16  # GPU disponível
+else:
+    BATCH_SIZE = 4   # Fallback para CPU
+
 # Menor = aprende mais devagar mas com mais precisão
 VALIDATION_SPLIT = (
     0.2  # 20% das imagens serão usadas para "testar" a IA (não para treinar)
@@ -73,9 +87,9 @@ DECAY_STEPS = 10000    # A cada quantos passos diminuímos a taxa de aprendizado
 DECAY_RATE = (
     0.9  # Por quanto multiplicamos a taxa (0.9 = reduz 10% a cada vez)
 )
-EPOCHS = 50  # Quantas vezes a IA vai "estudar" todo o conjunto de imagens
+EPOCHS = 100  # Quantas vezes a IA vai "estudar" todo o conjunto de imagens
 PATIENCE_EARLY_STOPPING = (
-    10  # Se a IA não melhorar por 7 épocas, paramos o treinamento
+    10  # Se a IA não melhorar por 10 épocas, paramos o treinamento
 )
 FINE_TUNE_AT_LAYER = 50     # A partir de qual camada vamos "ajustar finamente" a IA pré-treinada
 
@@ -184,10 +198,10 @@ data_augmentation = tf.keras.Sequential(
 # --- Otimização de Performance do Dataset ---
 # Configurações para que o carregamento das imagens seja mais rápido
 AUTOTUNE = tf.data.AUTOTUNE  # Deixa o TensorFlow otimizar automaticamente
-train_ds = train_ds.cache().prefetch(
-    buffer_size=AUTOTUNE
-)  # Cache + carregamento antecipado
-val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+
+# Aplicar otimizações
+train_ds = train_ds.cache().shuffle(1000).prefetch(AUTOTUNE)
+val_ds = val_ds.cache().prefetch(AUTOTUNE)
 
 # --- Cálculo de Pesos de Classe (para lidar com desbalanceamento) ---
 # Se tivermos muito mais imagens de uma classe que de outra, isso equilibra o aprendizado
@@ -241,7 +255,7 @@ print('\n--- Construindo Modelo ---')
 # Camada de normalização: converte imagens de 0-255 para -1 a 1
 # As IAs pré-treinadas esperam este formato específico
 rescale_layer = layers.Rescaling(
-    1.0 / 255, offset=-1, input_shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
+    1.0 / 127.5, offset=-1, input_shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
 )
 
 # Modelo base: MobileNetV2 - uma IA já treinada em milhões de imagens
@@ -275,26 +289,37 @@ print(
     f'Número de camadas treináveis no modelo base: {num_trainable_layers_base}'
 )
 
+# Classe personalizada para conversão RGB -> Grayscale que pode ser serializada
+@tf.keras.utils.register_keras_serializable()
+class RGBToGrayscale(layers.Layer):
+    def __init__(self, **kwargs):
+        super(RGBToGrayscale, self).__init__(**kwargs)
 
-# Adicione após rescale_layer
-grayscale_layer = layers.Lambda(
-    lambda x: tf.image.rgb_to_grayscale(x),
-    name='rgb_to_grayscale'
-)
+    def call(self, inputs):
+        return tf.image.rgb_to_grayscale(inputs)
 
-# Converte de volta para 3 canais (compatibilidade com MobileNetV2)
-grayscale_to_rgb = layers.Lambda(
-    lambda x: tf.concat([x, x, x], axis=-1),
-    name='grayscale_to_rgb'
-)
+    def get_config(self):
+        return super().get_config()
+
+# Classe personalizada para conversão Grayscale -> RGB que pode ser serializada  
+@tf.keras.utils.register_keras_serializable()
+class GrayscaleToRGB(layers.Layer):
+    def __init__(self, **kwargs):
+        super(GrayscaleToRGB, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        return tf.concat([inputs, inputs, inputs], axis=-1)
+
+    def get_config(self):
+        return super().get_config()
 
 # Construção do modelo completo: modelo base + nossas camadas personalizadas
 # É como empilhar blocos de Lego - cada camada processa a informação da anterior
 model = models.Sequential([
     rescale_layer,           # 1. Normaliza as imagens  
     data_augmentation,       # 2. Aplica variações (antes do grayscale!)
-    grayscale_layer,         # 3. Converte para escala de cinza
-    grayscale_to_rgb,        # 4. Volta para 3 canais
+    RGBToGrayscale(name='rgb_to_grayscale'),         # 3. Converte para escala de cinza
+    GrayscaleToRGB(name='grayscale_to_rgb'),        # 4. Volta para 3 canais
     base_model,              # 5. Modelo MobileNetV2 pré-treinado
     layers.GlobalAveragePooling2D(),
     layers.BatchNormalization(), 
@@ -331,7 +356,7 @@ model.compile(
             name='precision'
         ),  # Precisão: de todas que disse "sim", quantas estavam certas?
         tf.keras.metrics.Recall(name='recall'),
-    ],  # Recall: de todas que eram "sim", quantas encontrou?
+    ],  # Recall: de todas que eram "sim", quantas conseguiu encontrar?
 )
 
 # Mostra a estrutura do modelo
@@ -406,34 +431,45 @@ history = model.fit(
 # Cria gráficos para visualizar como foi o aprendizado
 print('\n--- Gerando Gráficos de Treinamento ---')
 
-plt.figure(figsize=(14, 6))  # Cria uma figura com tamanho específico
+# Configurações gerais para melhorar a visualização
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.titlesize': 16,
+    'axes.labelsize': 14,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 12,
+    'figure.titlesize': 18
+})
+
+plt.figure(figsize=(16, 8))  # Aumentado para melhor visualização
 
 # Primeiro gráfico: Loss (Perda)
-# Mostra como o "erro" da IA diminuiu ao longo do tempo
-plt.subplot(1, 2, 1)  # Primeiro gráfico de uma linha com 2 colunas
-plt.plot(history.history['loss'], label='Perda Treino')
-plt.plot(history.history['val_loss'], label='Perda Validação')
-plt.title('Perda (Loss) Durante Treinamento')
-plt.xlabel('Época')
-plt.ylabel('Perda')
-plt.legend()
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Perda Treino', linewidth=2.5, color='#1f77b4')
+plt.plot(history.history['val_loss'], label='Perda Validação', linewidth=2.5, color='#ff7f0e', linestyle='--')
+plt.title('Perda (Loss) Durante Treinamento', fontweight='bold', pad=15)
+plt.xlabel('Época', fontweight='bold')
+plt.ylabel('Perda', fontweight='bold')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.legend(frameon=True, facecolor='white', edgecolor='gray')
 
 # Segundo gráfico: Métricas (Acurácia, Precisão, Recall)
-# Mostra como a performance da IA melhorou
-plt.subplot(1, 2, 2)  # Segundo gráfico
-plt.plot(history.history['accuracy'], label='Acurácia Treino')
-plt.plot(history.history['val_accuracy'], label='Acurácia Validação')
-plt.plot(history.history.get('precision', []), label='Precisão Treino')
-plt.plot(history.history.get('val_precision', []), label='Precisão Validação')
-plt.plot(history.history.get('recall', []), label='Recall Treino')
-plt.plot(history.history.get('val_recall', []), label='Recall Validação')
-plt.title('Métricas Durante Treinamento')
-plt.xlabel('Época')
-plt.ylabel('Valor da Métrica')
-plt.legend()
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], label='Acurácia Treino', linewidth=2.5, color='#2ca02c')
+plt.plot(history.history['val_accuracy'], label='Acurácia Validação', linewidth=2.5, color='#d62728', linestyle='--')
+plt.plot(history.history.get('precision', []), label='Precisão Treino', linewidth=2.5, color='#9467bd')
+plt.plot(history.history.get('val_precision', []), label='Precisão Validação', linewidth=2.5, color='#8c564b', linestyle='--')
+plt.plot(history.history.get('recall', []), label='Recall Treino', linewidth=2.5, color='#e377c2')
+plt.plot(history.history.get('val_recall', []), label='Recall Validação', linewidth=2.5, color='#7f7f7f', linestyle='--')
+plt.title('Métricas Durante Treinamento', fontweight='bold', pad=15)
+plt.xlabel('Época', fontweight='bold')
+plt.ylabel('Valor da Métrica', fontweight='bold')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.legend(frameon=True, facecolor='white', edgecolor='gray')
 
-plt.tight_layout()  # Organiza os gráficos de forma bonita
-plt.savefig(os.path.join(MODELS_DIR, 'training_history.png'))  # Salva a imagem
+plt.tight_layout(pad=3.0)  # Maior espaçamento entre gráficos
+plt.savefig(os.path.join(MODELS_DIR, 'training_history.png'), dpi=300)  # Maior resolução
 plt.show()  # Mostra os gráficos na tela
 
 # --- Avaliação Final ---
@@ -537,7 +573,7 @@ if os.path.exists(best_accuracy_model_path):
     # Procura o melhor threshold (limite) para maximizar precisão
     from sklearn.metrics import precision_score
 
-    best_threshold = 0.5    # Começamos com o padrão
+    best_threshold = 0.65    # Começamos com o padrão
     best_precision = 0      # Melhor precisão encontrada
 
     # Testa diferentes thresholds entre 0.3 e 0.8
@@ -569,7 +605,7 @@ if os.path.exists(best_accuracy_model_path):
         1 if prob > best_threshold else 0 for prob in y_pred_probs_list
     ]  # Threshold otimizado
 
-    # Função para criar gráficos da matriz de confusão
+    # Função para criar gráficos da matriz de confusão com visualização melhorada
     def plot_confusion_matrix(
         cm, class_names_list, title='Matriz de Confusão', save_path=None
     ):
@@ -582,39 +618,50 @@ if os.path.exists(best_accuracy_model_path):
         - Diagonal principal: acertos
         - Fora da diagonal: erros
         """
-        plt.figure(figsize=(8, 6))
-        plt.imshow(
-            cm, interpolation='nearest', cmap=plt.cm.Blues
-        )  # Cria o gráfico com cores azuis
-        plt.title(title)
-        plt.colorbar()  # Barra de cores para entender os valores
+        plt.figure(figsize=(10, 8))
+        
+        # Usar uma paleta de cores mais clara para melhor contraste
+        cmap = plt.cm.Blues
+        plt.imshow(cm, interpolation='nearest', cmap=cmap)
+        plt.title(title, fontsize=18, fontweight='bold', pad=15)
+        cbar = plt.colorbar()
+        cbar.ax.tick_params(labelsize=12)
 
         # Configura os eixos com os nomes das classes
         tick_marks = np.arange(len(class_names_list))
-        plt.xticks(
-            tick_marks, class_names_list, rotation=45
-        )  # Rótulos no eixo X
-        plt.yticks(
-            tick_marks, class_names_list
-        )               # Rótulos no eixo Y
+        plt.xticks(tick_marks, class_names_list, rotation=45, fontsize=14, fontweight='bold')
+        plt.yticks(tick_marks, class_names_list, fontsize=14, fontweight='bold')
 
-        # Adiciona os números dentro de cada célula da matriz
-        thresh = cm.max() / 2.0  # Threshold para decidir cor do texto
+        # Adiciona os números dentro de cada célula da matriz com fonte maior
+        thresh = cm.max() / 2.0
         for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
             plt.text(
-                j,
-                i,
-                format(cm[i, j], 'd'),  # Número formatado
+                j, i, format(cm[i, j], 'd'),
                 horizontalalignment='center',
+                verticalalignment='center',
+                fontsize=16,
+                fontweight='bold',
                 color='white' if cm[i, j] > thresh else 'black',
-            )  # Cor do texto
+            )
+
+        # Adiciona linhas de grade
+        plt.grid(False)  # Remove a grade padrão
+        for i in range(cm.shape[0] + 1):
+            plt.axhline(i - 0.5, color='black', linewidth=1.5)
+            plt.axvline(i - 0.5, color='black', linewidth=1.5)
 
         plt.tight_layout()
-        plt.ylabel('Classe Real')      # Rótulo do eixo Y
-        plt.xlabel('Classe Prevista')  # Rótulo do eixo X
+        plt.ylabel('Classe Real', fontsize=16, fontweight='bold')
+        plt.xlabel('Classe Prevista', fontsize=16, fontweight='bold')
+
+        # Adicionando bordas ao redor da matriz
+        for spine in plt.gca().spines.values():
+            spine.set_visible(True)
+            spine.set_linewidth(2)
+            spine.set_color('black')
 
         if save_path:
-            plt.savefig(save_path)  # Salva a imagem se especificado
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')  # Alta resolução
         plt.show()
 
     # Cria matriz de confusão com threshold padrão (0.5)

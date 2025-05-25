@@ -1,9 +1,7 @@
 dataset/
 tests/
 models/
-best_model.keras
 ignore.md
-historico_treinamento.png
 
 logs/
 
