@@ -5,7 +5,7 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # Constantes
-TARGET_SIZE = (224, 224)  # Mesmo tamanho usado no treinamento
+TARGET_SIZE = (320, 320)  # Mesmo tamanho usado no treinamento
 MODELO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'cnn', 'best_cnn_adapt.keras')
 
 # Verifica disponibilidade de GPU
@@ -35,19 +35,35 @@ def preprocessa_imagem(caminho_imagem):
     
     # Converte para tensor e ajusta dimensões para sobel
     img_tensor = tf.convert_to_tensor(img_redimensionada, dtype=tf.float32)
+    img_tensor = img_tensor / 255.0  # Normalização melhorada
     img_tensor = tf.expand_dims(img_tensor, axis=-1)  # Adiciona canal
     img_tensor = tf.expand_dims(img_tensor, axis=0)   # Adiciona batch
     
     # Aplica Sobel filter
     sobel = tf.image.sobel_edges(img_tensor)
     
-    # Reformata para ter 2 canais (gx, gy) - formato consistente com o treinamento
-    sobel = tf.reshape(sobel, [-1, TARGET_SIZE[0], TARGET_SIZE[1], 2])
+    # Extrai gx e gy
+    gx = sobel[0, :, :, :, 0]
+    gy = sobel[0, :, :, :, 1]
     
-    # Normaliza os valores
-    sobel = sobel / (tf.reduce_max(tf.abs(sobel)) + 1e-9) * 0.5 + 0.5
+    # Calcula a magnitude
+    magnitude = tf.sqrt(tf.square(gx) + tf.square(gy))
     
-    return sobel
+    # Adicionar filtro Laplaciano para detectar bordas de segunda ordem (exatamente como no treino)
+    kernel_laplaciano = tf.constant([[[[-1]], [[-1]], [[-1]]],
+                                  [[[-1]], [[8]], [[-1]]],
+                                  [[[-1]], [[-1]], [[-1]]]], dtype=tf.float32)
+    laplacian = tf.nn.conv2d(img_tensor, kernel_laplaciano, strides=[1,1,1,1], padding='SAME')
+    laplacian = tf.clip_by_value(laplacian, -1, 1) * 0.5 + 0.5
+    laplacian = laplacian[0]  # Remove a dimensão do batch
+    
+    # Combina os 4 canais: Sobel_x, Sobel_y, Magnitude, Laplacian - mesma ordem do treino
+    combinado = tf.concat([gx, gy, magnitude, laplacian], axis=-1)
+    
+    # Adiciona a dimensão do batch
+    combinado = tf.expand_dims(combinado, axis=0)
+    
+    return combinado
 
 def predizer_imagem(caminho_imagem):
     """Prediz se a imagem é válida ou não usando o modelo CNN"""

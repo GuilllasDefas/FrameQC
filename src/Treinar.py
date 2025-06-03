@@ -107,6 +107,12 @@ def criar_data_generators(
         shuffle=False,
     )
 
+    # Checagem: se não houver imagens, abortar com mensagem clara
+    if train_gen.samples == 0 or val_gen.samples == 0:
+        print("\nERRO: Nenhuma imagem encontrada no diretório fornecido.")
+        print("Verifique se o diretório 'dataset' existe e contém subpastas 'Errados' e 'Certos' com imagens.")
+        exit(1)
+
     # Cálculo de class weights para dados desbalanceados
     classes = train_gen.classes
     class_weights = class_weight.compute_class_weight(
