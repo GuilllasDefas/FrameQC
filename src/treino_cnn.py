@@ -15,7 +15,7 @@ logging.getLogger('tensorflow').setLevel(logging.ERROR)
 # === 2) Parâmetros ===
 ORIG_HEIGHT = 1080  # ajuste para altura original
 ORIG_WIDTH  = 1920  # ajuste para largura original
-TARGET_SIZE = (320, 320)  # Reduzir tamanho para economizar memória
+TARGET_SIZE = (300, 300)  # Reduzir tamanho para economizar memória
 INITIAL_BATCH = 6  # Reduzir batch inicial
 VALIDATION_SPLIT = 0.2
 SEED = 123
@@ -133,7 +133,7 @@ model = models.Sequential([
     layers.BatchNormalization(),
     layers.Conv2D(128, 3, activation='relu', padding='same'),
     layers.MaxPooling2D(2),
-    layers.Dropout(0.2),
+    layers.Dropout(0.3),
     
     # Bloco 4 - Características de alto nível (reduzido)
     layers.Conv2D(256, 3, activation='relu', padding='same'),
@@ -143,10 +143,10 @@ model = models.Sequential([
     # Classificador simplificado
     layers.Dense(128, activation='relu'),
     layers.BatchNormalization(),
-    layers.Dropout(0.5),
+    layers.Dropout(0.3),
     layers.Dense(64, activation='relu'),
     layers.BatchNormalization(),
-    layers.Dropout(0.3),
+    layers.Dropout(0.2),
     layers.Dense(1, activation='sigmoid')
 ])
 model.summary()
@@ -333,7 +333,7 @@ y_pred_optimized = (y_pred_proba > best_threshold).astype(int)
 precision_opt = precision_score(y_true, y_pred_optimized)
 recall_opt = recall_score(y_true, y_pred_optimized)
 print(f"Precision otimizada: {precision_opt:.4f}")
-print(f"Recall otimizado: {recall_opt:.4f}")
+print(f"Recall otimizada: {recall_opt:.4f}")
 
 cm = confusion_matrix(y_true, y_pred_optimized)
 plt.figure(figsize=(8,7))
@@ -378,8 +378,9 @@ print(f"Falsos Negativos: {fn} ({fn/total*100:.1f}%)")
 fp_mask = np.logical_and(y_true == 0, y_pred_optimized == 1)
 fn_mask = np.logical_and(y_true == 1, y_pred_optimized == 0)
 
-fp_confidence = y_pred_proba[fp_mask]
-fn_confidence = y_pred_proba[fn_mask]
+# Corrigir indexação para garantir que as máscaras sejam 1D
+fp_confidence = y_pred_proba[fp_mask.ravel()]
+fn_confidence = y_pred_proba[fn_mask.ravel()]
 
 # Verificação de segurança
 print(f"Encontrados {len(fp_confidence)} falsos positivos para análise")

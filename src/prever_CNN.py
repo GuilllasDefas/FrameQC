@@ -5,7 +5,7 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # Constantes
-TARGET_SIZE = (320, 320)  # Mesmo tamanho usado no treinamento
+TARGET_SIZE = (300, 300)  # Mesmo tamanho usado no treinamento
 MODELO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'cnn', 'best_cnn_adapt.keras')
 
 # Verifica disponibilidade de GPU
